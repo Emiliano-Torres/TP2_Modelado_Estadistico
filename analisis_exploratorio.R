@@ -1,5 +1,8 @@
 library(ggplot2)
 library(dplyr)
+library(jsonlite)
+
+
 ### Analisis explotarorio de datos
 
 titles_train<- read.csv("titles_train.csv")
@@ -17,11 +20,7 @@ View(titles_train)
 View(credits_train)
 
 
-
 #hay votos y puntaje como promedio de votos
-typeof(titles_train$imdb_score)
-typeof(titles_train$imdb_votes)
-
 titles_train$imdb_score = as.numeric(titles_train$imdb_score)
 titles_train$imdb_votes = as.numeric(titles_train$imdb_votes)
 
@@ -30,6 +29,16 @@ titles_train$imdb_votes = as.numeric(titles_train$imdb_votes)
 cor(x=titles_train$imdb_votes , y=titles_train$imdb_score,use="complete.obs")
 
 # extraemos todos los generos
+
+
+titles_train$genres <- lapply(
+  gsub("'", "\"", titles_train$genres),
+  fromJSON
+)
+titles_train$genres <- lapply(titles_train$genres, fromJSON)
+
+str(titles_train$genres)
+
 
 generos <- unique(unlist(titles_train[[8]]))
 
@@ -84,7 +93,7 @@ resumen_personas <- datos_credits %>%
 actores_validos <- resumen_personas %>%
   filter(role == "ACTOR", cantidad >= 10) %>%
   arrange(desc(promedio_imdb)) %>%
-  slice_head(n = 15) %>%
+  #slice_head(n = 15) %>%
   pull(name)
 
 
@@ -111,7 +120,7 @@ datos_credits %>%
 directores_validos <- resumen_personas %>%
   filter(role == "DIRECTOR", cantidad >= 5) %>%
   arrange(desc(promedio_imdb)) %>%
-  slice_head(n = 15) %>%
+  #slice_head(n = 15) %>%
   pull(name)
 
 
