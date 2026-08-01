@@ -1,0 +1,57 @@
+
+# Causalidad 
+Vamos a estimar el efecto causal directo que tiene para una pelicula tener un componente de comedia sobre su Score. En el DAG podemos ver que hay 3 caminos no necesariamente dirigidos entre comedia y Score, además del efecto causal directo. 
+
+* Camino 1: Score <- País -> Comedia
+
+* Camino 2: Comedia -> Duración -> Score
+
+* Camino 3: Comedia -> Duración <- Año -> Score
+
+* Efecto Causal directo: Comedia -> Score
+
+Para poder estudiar el efecto causal directo debemos bloquear todos los caminos distintos del efecto causal directo Comedia → Score. Esto lo conseguimos encontrando un conjunto Z tal que al condicionar Score por Z el único efecto causal entre Comedia y Score sea el efecto causal directo. Para ello observamos los 3 caminos previamente definidos. El camino 3 está bloqueado por la presencia de duración que es un collider. Entonces tenemos efectos causales indirectos a través del confounder, País (camino 1), y  del elemento central de la cadena, Duración. Entonces ambos deben pertenecer a Z, notemos que al condicionar por Duración el camino 3 deja de estar bloqueado debido a que condicionamos al elemento central del collider. Entonces para cerrar el camino 3 nuevamente tenemos que condicionar a Año ya que año esta funcionando como una causa común entre Duración y Score. Luego conseguimos bloquear los 3 caminos. Esto se debe a que condicionar por País bloquea el camino 1 y condicionando a Año y Duración bloqueamos los caminos 2 y 3.  
+
+Luego procedemos planteamos un modelo lineal para estimar el efecto causal directo de comedia sobre Score. Planteamos el siguiente modelo
+
+Score = b0 + b1 Comedia + b2 Duracion + b3 año + b4 pais.
+
+Obteniendo que el efecto causal estimado bajo este modelo es el coeficiente b1 que tiene un valor -0.19 aproximadamente. Es decir que las peliculas que no contienen comedia entre sus generos suelen tener 0.2 puntos más que las que si lo tienen. Ahora veamos la asociacion mediante un modelo sin condicionar por el conjunto Z encontrado mediante un modelo lienal simple.
+
+Score = b0 + b1 Comedia
+
+Obtuvimos una asociacion de -0.21 aproximadamente. La diferencia es pequeña (0.02 puntos), lo que nos sugiere que el ajuste por esas variables modifica muy poco la asociación. Es decir, en este conjunto de datos, el efecto mediado por duración y el confounding por país parecen ser relativamente débiles (o se compensan entre sí)
+
+
+library(ggplot2)
+library(dplyr)
+
+
+titles_train<- read.csv("titles_train.csv")
+
+credits_train<- read.csv("credits_train.csv")
+
+
+titles_train$comedy <- grepl("comedy", titles_train$genres)
+
+
+
+modelo_ajustado <- lm(
+  imdb_score ~ comedy + runtime + release_year + factor(production_countries),
+  data = titles_train
+)
+
+coef(modelo_ajustado)["comedyTRUE"]
+
+
+modelo_ajustado$coefficients
+
+modelo_asociacion <- lm(
+  imdb_score ~ comedy,
+  data = titles_train
+)
+
+coef(modelo_asociacion)["comedyTRUE"]
+
+
+coef(modelo_ajustado)["release_year"]
