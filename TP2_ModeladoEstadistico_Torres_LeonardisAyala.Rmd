@@ -150,7 +150,7 @@ resumen_genero <- scores_genero %>%
   arrange(desc(media))
 ```
 
-```{r fig-eda, fig.width=7.4, fig.height=3.15, fig.cap="Izquierda: score medio de IMDB por género, con intervalo de confianza al 95\\% y cantidad de títulos (línea punteada: promedio global). Derecha: distribución completa del score según el tipo de título."}
+```{r fig-eda, fig.width=7.4, fig.height=3.15, out.width="100%", fig.cap="Izquierda: score medio de IMDB por género, con intervalo de confianza al 95\\% y cantidad de títulos (línea punteada: promedio global). Derecha: distribución completa del score según el tipo de título."}
 p1 <- resumen_genero %>%
   mutate(genero = fct_reorder(genero, media)) %>%
   ggplot(aes(x = media, y = genero)) +
@@ -209,7 +209,7 @@ estimar_eb <- function(datos, grupo, respuesta = "imdb_score") {
 datos_credits <- credits_train %>% inner_join(train_f %>% select(id, imdb_score), by = "id")
 ```
 
-```{r fig-pais, fig.width=7, fig.height=2.7, fig.cap="Score medio vs. cantidad de títulos (escala log), por director (izquierda) y por país principal (derecha). Línea punteada: promedio global. Ambos paneles comparten la escala vertical para que la comparación de dispersión sea justa."}
+```{r fig-pais, fig.width=7, fig.height=2.7, out.width="100%", fig.cap="Score medio vs. cantidad de títulos (escala log), por director (izquierda) y por país principal (derecha). Línea punteada: promedio global. Ambos paneles comparten la escala vertical para que la comparación de dispersión sea justa."}
 resumen_director <- datos_credits %>%
   filter(role == "DIRECTOR") %>%
   group_by(name) %>%
@@ -548,7 +548,7 @@ Para la familia con splines elegimos **país** y no director como variable de ag
 
 Enriquecer el modelo lineal con variables de elenco (modelo 2) casi no mejoró el MSE respecto del modelo 1, pero combinadas con splines y el efecto aleatorio de país (modelo 7) sí aportan, así que terminamos incluyéndolas.
 
-```{r fig-splines, fig.width=7.4, fig.height=2.85, fig.cap="Efecto parcial de cada spline del modelo ganador. El eje vertical está en puntos de IMDB centrado en cero (el score promedio): +1 significa que ese valor empuja la predicción un punto por encima del promedio. La banda es de dos errores estándar y las marcas del eje inferior son los valores observados, por eso se ensancha donde hay pocos títulos. Los paneles de duración comparten escala horizontal."}
+```{r fig-splines, fig.width=7.4, fig.height=2.85, out.width="100%", fig.cap="Efecto parcial de cada spline del modelo ganador. El eje vertical está en puntos de IMDB centrado en cero (el score promedio): +1 significa que ese valor empuja la predicción un punto por encima del promedio. La banda es de dos errores estándar y las marcas del eje inferior son los valores observados, por eso se ensancha donde hay pocos títulos. Los paneles de duración comparten escala horizontal."}
 ## extraemos cada suavizado con predict(type = "terms"), como en la clase de splines
 efecto_parcial <- function(modelo, datos, variable, columna, etiqueta, tipo = NULL, n = 200) {
   observados <- if (is.null(tipo)) datos else datos[datos$type == tipo, ]
