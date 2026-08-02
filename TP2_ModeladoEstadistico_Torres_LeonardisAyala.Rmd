@@ -160,7 +160,7 @@ p1 <- resumen_genero %>%
   geom_text(aes(x = media + 1.96 * se, label = paste0("n=", n)),
             hjust = -0.2, size = 2.2, color = "grey45") +
   scale_x_continuous(expand = expansion(mult = c(0.06, 0.20))) +
-  labs(title = "Score medio por género", x = "Score medio (IC 95%)", y = NULL) +
+  labs(title = "Score medio por género", x = "Score medio de IMDB (IC 95%)", y = "Género") +
   tema_tp
 
 p2 <- train_f %>%
@@ -186,7 +186,7 @@ train_f %>%
   ggplot(aes(x = type, y = runtime, fill = type)) +
   geom_boxplot(width = 0.5, show.legend = FALSE, outlier.alpha = 0.25, outlier.size = 0.8) +
   scale_fill_manual(values = paleta) +
-  labs(title = "Duración (runtime) según tipo de título", x = NULL, y = "Minutos") +
+  labs(title = "Duración (runtime) según tipo de título", x = "Tipo de título", y = "Duración (minutos)") +
   tema_tp
 ```
 
@@ -526,7 +526,7 @@ Enriquecer el modelo lineal con variables de elenco (modelo 2) casi no mejoró e
 
 Una limitación: los modelos 1, 2 y 5 representan el país con las 9 categorías más frecuentes (efecto fijo), mientras que los modelos 3, 4, 6 y 7 usan los `r nlevels(train_full$pais_principal)` países completos como agrupamiento de un efecto aleatorio. La comparación entre familias mezcla entonces dos decisiones a la vez, no aísla una sola.
 
-```{r fig-splines, fig.width=7.4, fig.height=2.8, fig.cap="Efecto parcial estimado de cada spline del modelo ganador, con banda de dos errores estándar. Las marcas del eje inferior son los valores observados. La duración se estima por separado para películas y series."}
+```{r fig-splines, fig.width=7.4, fig.height=2.85, fig.cap="Efecto parcial de cada spline del modelo ganador. El eje vertical está en puntos de IMDB centrado en cero (el score promedio): +1 significa que ese valor empuja la predicción un punto por encima del promedio. La banda es de dos errores estándar y las marcas del eje inferior son los valores observados, por eso se ensancha donde hay pocos títulos. Los paneles de duración comparten escala horizontal."}
 ## extraemos cada suavizado con predict(type = "terms"), como en la clase de splines
 efecto_parcial <- function(modelo, datos, variable, columna, etiqueta, tipo = NULL, n = 200) {
   observados <- if (is.null(tipo)) datos else datos[datos$type == tipo, ]
@@ -538,36 +538,45 @@ efecto_parcial <- function(modelo, datos, variable, columna, etiqueta, tipo = NU
          panel = etiqueta)
 }
 
-paneles <- c("Duración | Película", "Duración | Serie", "Año de estreno", "Votos de IMDB (log10)")
+curva_mov  <- efecto_parcial(m7_full, train_full, "runtime", "s(runtime):typeMOVIE", "m", tipo = "MOVIE")
+curva_show <- efecto_parcial(m7_full, train_full, "runtime", "s(runtime):typeSHOW",  "s", tipo = "SHOW")
+curva_anio <- efecto_parcial(m7_full, train_full, "release_year", "s(release_year)", "a")
+curva_vot  <- efecto_parcial(m7_full, train_full, "log_votes", "s(log_votes)",       "v")
 
-curvas <- bind_rows(
-  efecto_parcial(m7_full, train_full, "runtime", "s(runtime):typeMOVIE", paneles[1], tipo = "MOVIE"),
-  efecto_parcial(m7_full, train_full, "runtime", "s(runtime):typeSHOW",  paneles[2], tipo = "SHOW"),
-  efecto_parcial(m7_full, train_full, "release_year", "s(release_year)", paneles[3]),
-  efecto_parcial(m7_full, train_full, "log_votes", "s(log_votes)",       paneles[4])
-) %>% mutate(panel = factor(panel, levels = paneles))
+## escala vertical comun a los cuatro paneles, para que las magnitudes sean comparables
+todas   <- bind_rows(curva_mov, curva_show, curva_anio, curva_vot)
+lim_y   <- range(c(todas$fit - 2 * todas$se, todas$fit + 2 * todas$se))
+rango_runtime <- range(train_full$runtime)
 
-observaciones <- bind_rows(
-  tibble(x = train_full$runtime[train_full$type == "MOVIE"], panel = paneles[1]),
-  tibble(x = train_full$runtime[train_full$type == "SHOW"],  panel = paneles[2]),
-  tibble(x = train_full$release_year, panel = paneles[3]),
-  tibble(x = train_full$log_votes,    panel = paneles[4])
-) %>% mutate(panel = factor(panel, levels = paneles))
+panel_efecto <- function(curva, observados, titulo, etiqueta_x, con_y = FALSE, xlim = NULL) {
+  ggplot(curva, aes(x = x, y = fit)) +
+    geom_hline(yintercept = 0, color = "grey70", linewidth = 0.3) +
+    geom_ribbon(aes(ymin = fit - 2 * se, ymax = fit + 2 * se), fill = paleta[1], alpha = 0.20) +
+    geom_line(color = paleta[1], linewidth = 0.7) +
+    geom_rug(data = tibble(x = observados), aes(x = x), inherit.aes = FALSE,
+             alpha = 0.07, length = unit(0.025, "npc"), color = "grey25") +
+    coord_cartesian(ylim = lim_y, xlim = xlim) +
+    labs(title = titulo, x = etiqueta_x,
+         y = if (con_y) "Efecto sobre el score (puntos de IMDB)" else NULL) +
+    tema_tp +
+    theme(plot.title = element_text(size = 8.5), axis.title = element_text(size = 7.5))
+}
 
-ggplot(curvas, aes(x = x, y = fit)) +
-  geom_hline(yintercept = 0, color = "grey70", linewidth = 0.3) +
-  geom_ribbon(aes(ymin = fit - 2 * se, ymax = fit + 2 * se), fill = paleta[1], alpha = 0.20) +
-  geom_line(color = paleta[1], linewidth = 0.7) +
-  geom_rug(data = observaciones, aes(x = x), inherit.aes = FALSE,
-           alpha = 0.10, length = unit(0.03, "npc"), color = "grey30") +
-  facet_wrap(~panel, scales = "free_x", nrow = 1) +
-  labs(x = NULL, y = "Efecto sobre el score") +
-  tema_tp +
-  theme(strip.text = element_text(size = 7.5, face = "bold"),
-        panel.spacing = unit(0.5, "lines"))
+## el eje de votos se etiqueta en votos reales, no en unidades logaritmicas
+cortes_votos <- log10(c(100, 1e4, 1e6) + 1)
+
+p_mov  <- panel_efecto(curva_mov,  train_full$runtime[train_full$type == "MOVIE"],
+                       "Duración | Película", "Minutos", con_y = TRUE, xlim = rango_runtime)
+p_show <- panel_efecto(curva_show, train_full$runtime[train_full$type == "SHOW"],
+                       "Duración | Serie", "Minutos por episodio", xlim = rango_runtime)
+p_anio <- panel_efecto(curva_anio, train_full$release_year, "Año de estreno", "Año")
+p_vot  <- panel_efecto(curva_vot,  train_full$log_votes, "Votos de IMDB", "Votos (escala log)") +
+  scale_x_continuous(breaks = cortes_votos, labels = c("100", "10 mil", "1 M"))
+
+p_mov + p_show + p_anio + p_vot + plot_layout(nrow = 1)
 ```
 
-La Figura \ref{fig:fig-splines} muestra por qué el spline le gana al modelo lineal. El efecto de la duración no es monótono y tiene una forma bien distinta según el tipo: en películas cae hasta los 100 minutos y después sube con fuerza, mientras que en series es casi monótono creciente y mucho más suave (`r round(summary(m7_full)$s.table["s(runtime):typeSHOW","edf"],1)` grados de libertad efectivos contra `r round(summary(m7_full)$s.table["s(runtime):typeMOVIE","edf"],1)` en películas). El de los votos es el término más flexible de todos (`r round(summary(m7_full)$s.table["s(log_votes)","edf"],1)` grados de libertad) y crece de forma marcada: son las relaciones que un término lineal compartido no puede capturar. Las bandas se ensanchan en los extremos, donde el rug muestra que hay pocos títulos.
+La Figura \ref{fig:fig-splines} muestra por qué el spline le gana al modelo lineal. El efecto de la duración no es monótono y tiene una forma bien distinta según el tipo: en películas cae hasta los 100 minutos y después sube con fuerza, mientras que en series es casi monótono creciente y mucho más suave (`r round(summary(m7_full)$s.table["s(runtime):typeSHOW","edf"],1)` grados de libertad efectivos contra `r round(summary(m7_full)$s.table["s(runtime):typeMOVIE","edf"],1)` en películas). El de los votos es el término más flexible de todos (`r round(summary(m7_full)$s.table["s(log_votes)","edf"],1)` grados de libertad) y crece de forma marcada: son las relaciones que un término lineal compartido no puede capturar.
 
 ## 4. Competencia
 
