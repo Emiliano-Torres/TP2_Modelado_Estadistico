@@ -193,9 +193,7 @@ train_f %>%
 La Figura \ref{fig:fig-runtime-tipo} muestra por qué `runtime` no es directamente comparable entre películas y series: la mediana es `r round(median(train_f$runtime[train_f$type=="MOVIE"]))` minutos para películas pero solo `r round(median(train_f$runtime[train_f$type=="SHOW"]))` para series, porque ahí se mide la duración de un episodio y no de la temporada. Por eso en la Sección 3 dejamos que el efecto de `runtime` (lineal o vía spline) varíe según el tipo de título, en vez de compartir una única curva entre películas y series.
 
 ```{r eb-helper}
-## Empirical Bayes (Normal-Normal) vía un modelo mixto sin covariables: el
-## mismo partial pooling de la clase de modelos mixtos, aplicado a un score
-## continuo (en el TP1 usamos el análogo Beta-Binomial para una tasa).
+
 estimar_eb <- function(datos, grupo, respuesta = "imdb_score") {
   f <- as.formula(paste(respuesta, "~ (1 |", grupo, ")"))
   m <- lmer(f, data = datos)
@@ -263,8 +261,7 @@ tibble(
 Ninguna correlación lineal es fuerte, pero la tabla deja una decisión tomada: la cantidad de votos se relaciona con el score bastante mejor en escala logarítmica que en la original (`r round(cor(train_f$log_votes, train_f$imdb_score),3)` contra `r round(cor(train_f$imdb_votes, train_f$imdb_score),3)`), algo esperable en una variable que va de decenas a millones. Por eso en la Sección 3 todos los modelos usan $\log_{10}$ de los votos. Que aun así ninguna correlación pase de 0.3 anticipa que un modelo puramente lineal va a rendir peor que uno que permita curvas, algo que confirmamos más adelante.
 
 ```{r eda-personas}
-## rankeamos por Empirical Bayes en vez de por el promedio crudo, para que un
-## unico titulo con score alto no dispare a alguien al primer puesto
+
 ranking_persona <- function(role_buscado) {
   datos_rol <- datos_credits %>% filter(role == role_buscado)
   crudo <- datos_rol %>% group_by(name) %>% summarise(Titulos = n_distinct(id), Crudo = mean(imdb_score), .groups = "drop")
@@ -282,7 +279,7 @@ top_personas <- bind_rows(
   ranking_persona("ACTOR")    %>% mutate(Rol = "Actor")
 ) %>% select(Rol, everything())
 
-## cifras de estructura que citamos en el texto, calculadas y no escritas a mano
+## cifras que citamos en el texto
 dir_por_titulo <- credits_train %>% filter(role == "DIRECTOR") %>% distinct(id, name) %>% count(id)
 pct_un_director <- mean(dir_por_titulo$n == 1)
 
@@ -369,14 +366,14 @@ aristas <- tribble(
   ~x, ~y, ~xend, ~yend,
   0,    0.45, 0.78, 0,     # Pais -> Score
   0,    0.45, 0.22, 0,     # Pais -> Comedia
-  1,    0.45, 0.5,  1,     # Anio -> Duracion
-  1,    0.45, 0.78, 0,     # Anio -> Score
+  1,    0.45, 0.5,  1,     # Año -> Duracion
+  1,    0.45, 0.78, 0,     # Año -> Score
   0.22, 0,    0.5,  1,     # Comedia -> Duracion
   0.22, 0,    0.78, 0,     # Comedia -> Score
   0.5,  1,    0.78, 0      # Duracion -> Score
 )
 
-## acortamos cada segmento en los extremos para que la flecha no quede tapada por las cajas de texto
+## acortamos cada segmento en los extremos para que la flecha no quede tapada por las cajas de texto (???)
 margen <- 0.09
 aristas <- aristas %>%
   mutate(
@@ -549,7 +546,7 @@ Para la familia con splines elegimos **país** y no director como variable de ag
 Enriquecer el modelo lineal con variables de elenco (modelo 2) casi no mejoró el MSE respecto del modelo 1, pero combinadas con splines y el efecto aleatorio de país (modelo 7) sí aportan, así que terminamos incluyéndolas.
 
 ```{r fig-splines, fig.width=7.4, fig.height=2.85, out.width="100%", fig.cap="Efecto parcial de cada spline del modelo ganador. El eje vertical está en puntos de IMDB centrado en cero (el score promedio): +1 significa que ese valor empuja la predicción un punto por encima del promedio. La banda es de dos errores estándar y las marcas del eje inferior son los valores observados, por eso se ensancha donde hay pocos títulos. Los paneles de duración comparten escala horizontal."}
-## extraemos cada suavizado con predict(type = "terms"), como en la clase de splines
+
 efecto_parcial <- function(modelo, datos, variable, columna, etiqueta, tipo = NULL, n = 200) {
   observados <- if (is.null(tipo)) datos else datos[datos$type == tipo, ]
   grilla <- datos[rep(1, n), , drop = FALSE]
