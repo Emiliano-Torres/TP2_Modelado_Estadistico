@@ -77,6 +77,7 @@ construir_features <- function(titles, credits, stats) {
       type      = factor(type, levels = c("MOVIE", "SHOW")),
       age_certification = ifelse(is.na(age_certification) | age_certification == "", "Desconocida", age_certification),
       imdb_votes = ifelse(is.na(imdb_votes), stats$mediana_votes, imdb_votes),
+      log_votes = log10(imdb_votes + 1),
       numero_temporadas = ifelse(is.na(seasons), 0, seasons)
     )
 
@@ -134,6 +135,8 @@ En el catálogo de streaming tenemos `r nrow(titles_train)` títulos (`r sum(tit
 
 ## 1. Análisis exploratorio
 
+Antes de mirar los datos tomamos algunas decisiones de preparación. Las columnas `genres` y `production_countries` vienen como listas escritas en texto, así que las parseamos: de la primera armamos una indicadora binaria por género (un título puede tener varios) y de la segunda nos quedamos con el primer país, al que llamamos *país principal*. Las categorías de `age_certification` con menos de 20 títulos las juntamos en una categoría "Otra", y los faltantes quedaron como "Desconocida", que es una categoría informativa en sí misma porque cubre el `r round(100*mean(is.na(titles_train$age_certification)))`\% del catálogo. Los `r sum(is.na(titles_train$imdb_votes))` títulos sin `imdb_votes` se imputaron con la mediana. Un punto importante: todos estos cortes (qué países entran en el grupo de los frecuentes, qué certificaciones sobreviven, el valor de la mediana) se calcularon **únicamente sobre el conjunto de entrenamiento** y después se aplicaron igual al de testeo, para no filtrar información del test hacia el ajuste.
+
 ```{r eda-genero-datos}
 scores_genero <- train_f %>%
   select(id, imdb_score, genres) %>%
@@ -147,34 +150,37 @@ resumen_genero <- scores_genero %>%
   arrange(desc(media))
 ```
 
-```{r fig-eda, fig.width=7.4, fig.height=3.4, fig.cap="Izquierda: score medio de IMDB por género, con intervalo de confianza al 95\\% y cantidad de títulos (línea punteada: promedio global). Derecha: score medio por tipo de título."}
+```{r fig-eda, fig.width=7.4, fig.height=3.15, fig.cap="Izquierda: score medio de IMDB por género, con intervalo de confianza al 95\\% y cantidad de títulos (línea punteada: promedio global). Derecha: distribución completa del score según el tipo de título."}
 p1 <- resumen_genero %>%
   mutate(genero = fct_reorder(genero, media)) %>%
   ggplot(aes(x = media, y = genero)) +
   geom_vline(xintercept = mean(train_f$imdb_score), linetype = "dashed", color = "grey40") +
   geom_pointrange(aes(xmin = media - 1.96 * se, xmax = media + 1.96 * se),
-                   color = paleta[1], linewidth = 0.5, size = 0.35) +
-  geom_text(aes(label = paste0("n=", n)), hjust = -0.25, size = 2.4, color = "grey40") +
-  scale_x_continuous(expand = expansion(mult = c(0.05, 0.18))) +
+                   color = paleta[1], linewidth = 0.5, size = 0.3) +
+  geom_text(aes(x = media + 1.96 * se, label = paste0("n=", n)),
+            hjust = -0.2, size = 2.2, color = "grey45") +
+  scale_x_continuous(expand = expansion(mult = c(0.06, 0.20))) +
   labs(title = "Score medio por género", x = "Score medio (IC 95%)", y = NULL) +
   tema_tp
 
 p2 <- train_f %>%
-  group_by(type) %>%
-  summarise(media = mean(imdb_score), .groups = "drop") %>%
   mutate(type = recode(type, MOVIE = "Película", SHOW = "Serie")) %>%
-  ggplot(aes(x = type, y = media, fill = type)) +
-  geom_col(width = 0.55, show.legend = FALSE) +
-  scale_fill_manual(values = paleta) +
-  labs(title = "Score medio por tipo", x = NULL, y = "Score medio") +
-  tema_tp
+  ggplot(aes(x = imdb_score, fill = type, color = type)) +
+  geom_density(alpha = 0.35, linewidth = 0.5) +
+  scale_fill_manual(values = paleta[c(1, 2)]) +
+  scale_color_manual(values = paleta[c(1, 2)]) +
+  labs(title = "Distribución del score por tipo", x = "Score de IMDB", y = "Densidad",
+       fill = NULL, color = NULL) +
+  tema_tp +
+  theme(legend.position = "top", legend.key.size = unit(0.3, "cm"),
+        legend.text = element_text(size = 7))
 
 p1 + p2 + plot_layout(widths = c(1.5, 1))
 ```
 
-La Figura \ref{fig:fig-eda} muestra que los géneros con mejor score son **war**, **history** y **documentation**, mientras que **horror** es notoriamente el peor puntuado. Los intervalos de confianza también avisan cuáles diferencias son más sólidas: géneros con pocos títulos (**western**, n=31) tienen bandas mucho más anchas que géneros frecuentes (**drama**, n=1916), así que conviene leer esas colas con cautela   un boxplot mostraría la dispersión entre títulos individuales, que es parecida en todos los géneros, y no esa incertidumbre sobre el promedio, que es la que nos interesa ahora. Las series (`r round(mean(train_f$imdb_score[train_f$type=="SHOW"]),2)`) puntúan sistemáticamente más alto que las películas (`r round(mean(train_f$imdb_score[train_f$type=="MOVIE"]),2)`), una diferencia que retomamos en la sección de modelado.
+La Figura \ref{fig:fig-eda} muestra que los géneros con mejor score son **war**, **history** y **documentation**, mientras que **horror** es notoriamente el peor puntuado. Los intervalos de confianza también avisan cuáles diferencias son más sólidas: géneros con pocos títulos (**western**, n=31) tienen bandas mucho más anchas que géneros frecuentes (**drama**, n=1916), así que conviene leer esas colas con cautela. Elegimos mostrar el intervalo de confianza y no un boxplot porque el boxplot describe la dispersión entre títulos individuales, que es parecida en todos los géneros (el desvío ronda 1.1 en casi todos), mientras que acá nos interesa la incertidumbre sobre el promedio, que sí cambia mucho con el tamaño del grupo. Las series (`r round(mean(train_f$imdb_score[train_f$type=="SHOW"]),2)`) puntúan sistemáticamente más alto que las películas (`r round(mean(train_f$imdb_score[train_f$type=="MOVIE"]),2)`), una diferencia que retomamos en la sección de modelado.
 
-```{r fig-runtime-tipo, fig.width=6, fig.height=2.4, fig.cap="Duración según el tipo de título. Para las series, runtime es la duración de un episodio, no de la temporada completa."}
+```{r fig-runtime-tipo, fig.width=6, fig.height=2.0, fig.cap="Duración según el tipo de título. Para las series, runtime es la duración de un episodio, no de la temporada completa."}
 train_f %>%
   mutate(type = recode(type, MOVIE = "Película", SHOW = "Serie")) %>%
   ggplot(aes(x = type, y = runtime, fill = type)) +
@@ -203,40 +209,49 @@ estimar_eb <- function(datos, grupo, respuesta = "imdb_score") {
 datos_credits <- credits_train %>% inner_join(train_f %>% select(id, imdb_score), by = "id")
 ```
 
-```{r fig-pais, fig.width=7, fig.height=3, fig.cap="Score medio vs. cantidad de títulos (escala log), por director (izquierda) y por país principal (derecha). Línea punteada: promedio global. El mismo diagnóstico que vimos con los counties de radon en la clase de modelos mixtos."}
-p_director <- datos_credits %>%
+```{r fig-pais, fig.width=7, fig.height=2.7, fig.cap="Score medio vs. cantidad de títulos (escala log), por director (izquierda) y por país principal (derecha). Línea punteada: promedio global. Ambos paneles comparten la escala vertical para que la comparación de dispersión sea justa. Es el mismo diagnóstico que vimos con los counties de radon en la clase de modelos mixtos."}
+resumen_director <- datos_credits %>%
   filter(role == "DIRECTOR") %>%
   group_by(name) %>%
-  summarise(n = n_distinct(id), media = mean(imdb_score), .groups = "drop") %>%
+  summarise(n = n_distinct(id), media = mean(imdb_score), .groups = "drop")
+
+resumen_pais <- train_f %>%
+  group_by(pais_principal) %>%
+  summarise(n = n(), media = mean(imdb_score), .groups = "drop")
+
+rango_y <- range(c(resumen_director$media, resumen_pais$media))
+
+p_director <- resumen_director %>%
   ggplot(aes(x = n, y = media)) +
   geom_hline(yintercept = mean(train_f$imdb_score), linetype = "dashed", color = "grey40") +
-  geom_point(alpha = 0.4, color = paleta[1], size = 1.1) +
+  geom_point(alpha = 0.35, color = paleta[1], size = 1) +
   scale_x_log10() +
+  coord_cartesian(ylim = rango_y) +
   labs(title = "Score medio por director", x = "Títulos del director (escala log)", y = "Score medio") +
   tema_tp
 
-p_pais <- train_f %>%
-  group_by(pais_principal) %>%
-  summarise(n = n(), media = mean(imdb_score), .groups = "drop") %>%
+p_pais <- resumen_pais %>%
   ggplot(aes(x = n, y = media)) +
   geom_hline(yintercept = mean(train_f$imdb_score), linetype = "dashed", color = "grey40") +
-  geom_point(alpha = 0.6, color = paleta[3], size = 1.6) +
+  geom_point(alpha = 0.6, color = paleta[3], size = 1.5) +
   scale_x_log10() +
+  coord_cartesian(ylim = rango_y) +
   labs(title = "Score medio por país", x = "Títulos del país (escala log)", y = NULL) +
   tema_tp
 
 p_director + p_pais
 ```
 
-La Figura \ref{fig:fig-pais} es el mismo diagnóstico "funnel" que vimos con los counties de radon: los grupos con pocos títulos (izquierda de cada panel) se dispersan mucho más lejos del promedio global que los grupos con muchos títulos   eso es ruido, no una diferencia real entre directores o países. La forma de embudo, más marcada en director que en país porque hay muchísimos más directores con 1 o 2 títulos, es exactamente lo que motiva usar un efecto aleatorio en vez de un efecto fijo plano para estas variables: más abajo rankeamos directores y actores con Empirical Bayes en vez de promedio crudo (Tablas \ref{tab:tabla-directores} y \ref{tab:tabla-actores}), y en la Sección 3 usamos país (y también probamos director) como variable de agrupamiento de un modelo mixto por la misma razón.
+La Figura \ref{fig:fig-pais} es el mismo diagnóstico "funnel" que vimos con los counties de radon: los grupos con pocos títulos (izquierda de cada panel) se dispersan mucho más lejos del promedio global que los grupos con muchos títulos: eso es ruido, no una diferencia real entre directores o países. La forma de embudo, más marcada en director que en país porque hay muchísimos más directores con 1 o 2 títulos, es exactamente lo que motiva usar un efecto aleatorio en vez de un efecto fijo plano para estas variables: más abajo rankeamos directores y actores con Empirical Bayes en vez de promedio crudo (Tabla \ref{tab:tabla-personas}), y en la Sección 3 usamos país (y también probamos director) como variable de agrupamiento de un modelo mixto por la misma razón.
 
 ```{r tabla-correlaciones}
 tibble(
-  Variable = c("Duración (runtime)", "Año de estreno", "Cantidad de votos (log10)", "Cantidad de géneros"),
+  Variable = c("Duración (runtime)", "Año de estreno", "Cantidad de votos", "Cantidad de votos (log10)", "Cantidad de géneros"),
   `Correlación con score` = round(c(
     cor(train_f$runtime, train_f$imdb_score),
     cor(train_f$release_year, train_f$imdb_score),
-    cor(log10(train_f$imdb_votes + 1), train_f$imdb_score),
+    cor(train_f$imdb_votes, train_f$imdb_score),
+    cor(train_f$log_votes, train_f$imdb_score),
     cor(train_f$n_generos, train_f$imdb_score)
   ), 3)
 ) %>%
@@ -244,7 +259,7 @@ tibble(
   kable_styling(latex_options = "hold_position", font_size = 9)
 ```
 
-Ninguna correlación lineal es fuerte: la más alta es la de los votos (en escala logarítmica), y aun así es moderada. Esto ya anticipa que un modelo puramente lineal va a rendir peor que uno que permita curvas   lo que confirmamos en la Sección 3.
+Ninguna correlación lineal es fuerte, pero la tabla deja una decisión tomada: la cantidad de votos se relaciona con el score bastante mejor en escala logarítmica que en la original (`r round(cor(train_f$log_votes, train_f$imdb_score),3)` contra `r round(cor(train_f$imdb_votes, train_f$imdb_score),3)`), algo esperable en una variable que va de decenas a millones. Por eso en la Sección 3 todos los modelos usan $\log_{10}$ de los votos. Que aun así ninguna correlación pase de 0.3 anticipa que un modelo puramente lineal va a rendir peor que uno que permita curvas, algo que confirmamos más adelante.
 
 ```{r eda-personas}
 ## rankeamos por Empirical Bayes en vez de por el promedio crudo, para que un
@@ -256,13 +271,15 @@ ranking_persona <- function(role_buscado) {
   crudo %>%
     inner_join(eb, by = "name") %>%
     arrange(desc(score_eb)) %>%
-    slice_head(n = 5) %>%
+    slice_head(n = 3) %>%
     mutate(across(c(Crudo, score_eb), ~ round(.x, 2))) %>%
     select(Nombre = name, Titulos, Crudo, `Empirical Bayes` = score_eb)
 }
 
-top_directores <- ranking_persona("DIRECTOR")
-top_actores    <- ranking_persona("ACTOR")
+top_personas <- bind_rows(
+  ranking_persona("DIRECTOR") %>% mutate(Rol = "Director"),
+  ranking_persona("ACTOR")    %>% mutate(Rol = "Actor")
+) %>% select(Rol, everything())
 
 resumen_palabras <- train_f %>%
   select(id, imdb_score, description) %>%
@@ -274,13 +291,6 @@ resumen_palabras <- train_f %>%
   filter(n >= 30) %>%
   arrange(desc(media))
 
-palabras_extremas <- bind_rows(
-  resumen_palabras %>% slice_head(n = 5) %>% mutate(Grupo = "Score alto"),
-  resumen_palabras %>% slice_tail(n = 5) %>% mutate(Grupo = "Score bajo")
-) %>%
-  mutate(media = round(media, 2)) %>%
-  select(Grupo, Palabra = palabra, Apariciones = n, `Score medio` = media)
-
 resumen_palabras_titulo <- train_f %>%
   select(id, imdb_score, title) %>%
   unnest_tokens(palabra, title) %>%
@@ -291,43 +301,40 @@ resumen_palabras_titulo <- train_f %>%
   filter(n >= 15) %>%
   arrange(desc(media))
 
-palabras_titulo_extremas <- bind_rows(
-  resumen_palabras_titulo %>% slice_head(n = 5) %>% mutate(Grupo = "Score alto"),
-  resumen_palabras_titulo %>% slice_tail(n = 5) %>% mutate(Grupo = "Score bajo")
+extremos <- function(datos, fuente, k = 2) {
+  bind_rows(
+    datos %>% slice_head(n = k) %>% mutate(Grupo = "Score alto"),
+    datos %>% slice_tail(n = k) %>% mutate(Grupo = "Score bajo")
+  ) %>% mutate(Fuente = fuente)
+}
+
+palabras_extremas <- bind_rows(
+  extremos(resumen_palabras, "Descripción"),
+  extremos(resumen_palabras_titulo, "Título")
 ) %>%
   mutate(media = round(media, 2)) %>%
-  select(Grupo, Palabra = palabra, Apariciones = n, `Score medio` = media)
+  select(Fuente, Grupo, Palabra = palabra, Apariciones = n, `Score medio` = media)
 ```
 
-```{r tabla-directores}
-top_directores %>%
-  kable(booktabs = TRUE, caption = "Directores mejor rankeados por Empirical Bayes (score crudo incluido para comparar).") %>%
-  kable_styling(latex_options = c("hold_position"), font_size = 8)
-```
-
-```{r tabla-actores}
-top_actores %>%
-  kable(booktabs = TRUE, caption = "Actores mejor rankeados por Empirical Bayes (score crudo incluido para comparar).") %>%
-  kable_styling(latex_options = c("hold_position"), font_size = 8)
+```{r tabla-personas}
+top_personas %>%
+  kable(booktabs = TRUE, caption = "Directores y actores mejor rankeados por Empirical Bayes, con el score crudo al lado para comparar.") %>%
+  kable_styling(latex_options = c("hold_position"), font_size = 8) %>%
+  collapse_rows(columns = 1, valign = "middle")
 ```
 
 ```{r tabla-palabras}
 palabras_extremas %>%
-  kable(booktabs = TRUE, caption = "Palabras de la descripción con mayor y menor score medio (>=30 apariciones).") %>%
+  kable(booktabs = TRUE, caption = "Palabras con mayor y menor score medio, en la descripción (>=30 apariciones) y en el título (>=15).") %>%
   kable_styling(latex_options = c("hold_position"), font_size = 8) %>%
-  collapse_rows(columns = 1, valign = "middle")
+  collapse_rows(columns = 1:2, valign = "middle")
 ```
 
-```{r tabla-palabras-titulo}
-palabras_titulo_extremas %>%
-  kable(booktabs = TRUE, caption = "Palabras del título con mayor y menor score medio (>=15 apariciones).") %>%
-  kable_styling(latex_options = c("hold_position"), font_size = 8) %>%
-  collapse_rows(columns = 1, valign = "middle")
-```
+Para rankear directores y actores usamos **Empirical Bayes** en vez del promedio crudo: ajustamos un modelo mixto sin covariables (`lmer(imdb_score ~ (1 | nombre))`) y usamos la estimación de cada intercept aleatorio como score ajustado. Es el mismo *partial pooling* Normal-Normal de la clase de modelos mixtos, versión continua del Beta-Binomial que usamos en el TP1 para tasas de adopción. Si rankeamos por el promedio crudo sin ningún filtro, el top de ambas categorías queda dominado por nombres con **un solo título** y un score alto de pura casualidad (por ejemplo, varios actores de una sola serie muy bien puntuada llegan a 9.5 crudo); el ranking por Empirical Bayes en cambio favorece a quienes repiten buenos puntajes en varios títulos (Tabla \ref{tab:tabla-personas}), sin necesitar un umbral arbitrario de "al menos N títulos" como hubiéramos tenido que imponer con el crudo.
 
-Para rankear directores y actores usamos **Empirical Bayes** en vez del promedio crudo: ajustamos un modelo mixto sin covariables (`lmer(imdb_score ~ (1 | nombre))`) y usamos la estimación de cada intercept aleatorio como score ajustado   el mismo *partial pooling* Normal-Normal de la clase de modelos mixtos, versión continua del Beta-Binomial que usamos en el TP1 para tasas de adopción. Si rankeamos por el promedio crudo sin ningún filtro, el top 5 de ambas categorías queda dominado por nombres con **un solo título** y un score alto de pura casualidad (por ejemplo, varios actores de una sola serie muy bien puntuada llegan a 9.5 crudo); el ranking por Empirical Bayes en cambio favorece a quienes repiten buenos puntajes en varios títulos (Tablas \ref{tab:tabla-directores} y \ref{tab:tabla-actores}), sin necesitar un umbral arbitrario de "al menos N títulos" como hubiéramos tenido que imponer con el crudo.
+En la Sección 3 retomamos esta misma lógica en los modelos de efectos mixtos: probamos **país** y **director** como variables de agrupamiento (modelos 3 y 4), pero no actor. La razón no es que el shrinkage no funcione con actor (la Tabla \ref{tab:tabla-personas} muestra que funciona igual de bien), sino que cada título tiene un solo país y, en nuestra simplificación, un solo director principal (el primero acreditado; alrededor del 90\% de los títulos con director tienen exactamente uno), mientras que puede tener muchos actores. Un efecto aleatorio por actor con más de 36.000 niveles, el 82\% de ellos con un solo título, encarece mucho el ajuste sin aportar demasiado sobre lo que ya capturan género y tipo de título.
 
-En la Sección 3 retomamos esta misma lógica en los modelos de efectos mixtos: probamos **país** y **director** como variables de agrupamiento (modelos 3 y 4), pero no actor. La razón no es que el shrinkage no funcione con actor   la Tabla \ref{tab:tabla-actores} muestra que funciona igual de bien, sino que cada título tiene un solo país y, en nuestra simplificación, un solo director principal (el primero acreditado; ~90\% de los títulos con director tienen exactamente uno), mientras que puede tener muchos actores. Un efecto aleatorio por actor con más de 36.000 niveles (82\% con un solo título) encarece mucho el ajuste sin aportar demasiado sobre lo que ya capturan género y tipo de título. En cuanto al texto (Tablas \ref{tab:tabla-palabras} y \ref{tab:tabla-palabras-titulo}), tanto en la descripción como en el título las palabras de mayor score remiten a docudramas, historia o relatos de vida ("century", "political", "story", "life"), mientras que las de menor score remiten a comedias románticas o de época festiva ("boyfriend", "christmas")   coherente con el patrón por género de la Figura \ref{fig:fig-eda}.
+En cuanto al texto (Tabla \ref{tab:tabla-palabras}), tanto en la descripción como en el título las palabras de mayor score remiten a docudramas, historia o relatos de vida ("century", "political", "story", "life"), mientras que las de menor score remiten a comedias románticas o de época festiva ("boyfriend", "christmas"), coherente con el patrón por género de la Figura \ref{fig:fig-eda}.
 
 ## 2. Causalidad
 
@@ -372,15 +379,19 @@ ggplot() +
   coord_cartesian(clip = "off")
 ```
 
-Nos interesa el efecto causal **directo** de Comedia sobre Score, es decir, el que no pasa por Duración. Según el DAG (Figura \ref{fig:fig-dag}) hay tres caminos entre Comedia y Score además del efecto directo:
+Nos interesa el efecto causal **directo** de Comedia sobre Score, es decir, el que no pasa por Duración. Buscamos entonces un conjunto $Z \subseteq \{$Año, Duración, País$\}$ que bloquee todos los caminos entre Comedia y Score salvo el arco directo. Además de ese arco, en el DAG (Figura \ref{fig:fig-dag}) hay tres caminos:
 
-- **Camino 1**: Score $\leftarrow$ País $\rightarrow$ Comedia (País es un confusor común).
-- **Camino 2**: Comedia $\rightarrow$ Duración $\rightarrow$ Score (mediación por Duración).
-- **Camino 3**: Comedia $\rightarrow$ Duración $\leftarrow$ Año $\rightarrow$ Score (Duración es un *collider* en este camino).
+- **Camino 1**: Comedia $\leftarrow$ País $\rightarrow$ Score, donde País es un *confounder*.
+- **Camino 2**: Comedia $\rightarrow$ Duración $\rightarrow$ Score, una *cadena* con Duración en el medio.
+- **Camino 3**: Comedia $\rightarrow$ Duración $\leftarrow$ Año $\rightarrow$ Score, donde Duración es un *collider* y Año es un confounder entre Duración y Score.
 
-Como buscamos el efecto **no mediado por Duración**, estamos obligados a condicionar por Duración para cerrar el Camino 2. Pero condicionar por un collider lo **abre**: al fijar Duración, el Camino 3 deja de estar bloqueado. Para volver a cerrarlo hay que condicionar también por Año, que es la otra variable de ese camino. Por separado, el Camino 1 solo se cierra condicionando por País, ya que es la única variable en ese camino.
+Aplicando el criterio de bloqueo visto en clase, las tres variables quedan forzadas de a una:
 
-No hay otra combinación posible: Duración es obligatoria por la definición del efecto que buscamos, y una vez que se condiciona por ella, tanto Año como País pasan a ser obligatorios para cerrar los caminos que quedan (o se abren). El **único conjunto de ajuste válido es Z = {País, Año, Duración}**.
+- **Duración $\in Z$**. El Camino 2 es una cadena cuyo único nodo intermedio es Duración, así que la única forma de bloquearlo es condicionar por ella. Es exactamente lo que pide la consigna al hablar del efecto *no mediado* por Duración.
+- **País $\in Z$**. El Camino 1 tiene un solo nodo intermedio, País, que además es el nodo central de un confounder, así que hay que incluirlo.
+- **Año $\in Z$**. El Camino 3 venía bloqueado de entrada, porque Duración es un collider que no estaba en $Z$ y ninguno de sus descendientes tampoco. Pero al agregar Duración en el primer paso ese camino **se abre**, y el único nodo que queda para volver a cerrarlo es Año, que es el nodo central de un confounder entre Duración y Score.
+
+Como las tres variables resultaron obligatorias, ningún otro subconjunto de $\{$Año, Duración, País$\}$ sirve: el **único conjunto de ajuste válido es Z = {País, Año, Duración}**. Vale la pena notar que el orden del razonamiento importa. Si uno evaluara el Camino 3 antes de decidir sobre Duración, concluiría que ya está bloqueado y que Año es innecesario; recién al condicionar por el collider aparece la necesidad de agregar Año.
 
 ```{r causalidad}
 modelo_ajustado <- lm(imdb_score ~ comedy + runtime + release_year + factor(pais_principal), data = train_f)
@@ -399,31 +410,35 @@ tibble(
   kable_styling(latex_options = "hold_position", font_size = 9)
 ```
 
-Ajustamos $\text{Score} = \beta_0 + \beta_1 \text{Comedia} + \beta_2 \text{Duración} + \beta_3 \text{Año} + \beta_4 \text{País}$ sobre los datos de entrenamiento. El efecto causal directo estimado es $\hat\beta_1 = `r round(b1_ajustado,3)`$: los títulos que incluyen comedia entre sus géneros tienen, en promedio, `r abs(round(b1_ajustado,2))` puntos menos de score que los que no la incluyen, manteniendo fijos duración, año y país. La asociación cruda ($`r round(b1_crudo,3)`$) es muy parecida a la ajustada: la diferencia es de apenas `r round(b1_ajustado - b1_crudo,3)` puntos. Esto sugiere que, en este dataset, el confounding por País y la mediación por Duración son efectos débiles (o se cancelan parcialmente entre sí)   la asociación cruda ya es un buen proxy del efecto causal directo.
+Ajustamos $\text{Score} = \beta_0 + \beta_1 \text{Comedia} + \beta_2 \text{Duración} + \beta_3 \text{Año} + \beta_4 \text{País}$ sobre los datos de entrenamiento. El efecto causal directo estimado es $\hat\beta_1 = `r round(b1_ajustado,3)`$: los títulos que incluyen comedia entre sus géneros tienen, en promedio, `r abs(round(b1_ajustado,2))` puntos menos de score que los que no la incluyen, manteniendo fijos duración, año y país. La asociación cruda ($`r round(b1_crudo,3)`$) es muy parecida a la ajustada: la diferencia es de apenas `r round(b1_ajustado - b1_crudo,3)` puntos. Esto sugiere que, en este dataset, el confounding por País y la mediación por Duración son efectos débiles (o se cancelan parcialmente entre sí): la asociación cruda ya es un buen proxy del efecto causal directo.
 
 ## 3. Selección de modelos
 
 ```{r formulas-modelos}
-f1 <- as.formula(paste("imdb_score ~ runtime * type + release_year + imdb_votes + age_certification_agr + pais_agrupado +", generos_formula))
-f2 <- as.formula(paste("imdb_score ~ runtime * type + release_year + imdb_votes + age_certification_agr + pais_agrupado + numero_temporadas + cantidad_actores + cantidad_directores + n_generos +", generos_formula))
-f3 <- as.formula(paste("imdb_score ~ runtime * type + release_year + imdb_votes + age_certification_agr +", generos_formula, "+ (1 | pais_principal)"))
-f4 <- as.formula(paste("imdb_score ~ runtime * type + release_year + imdb_votes + age_certification_agr +", generos_formula, "+ (1 | director_principal)"))
-f5 <- as.formula(paste("imdb_score ~ s(runtime, by = type) + type + s(release_year) + s(imdb_votes) + age_certification_agr + pais_agrupado +", generos_formula))
-f6 <- as.formula(paste("imdb_score ~ s(runtime, by = type) + type + s(release_year) + s(imdb_votes) + age_certification_agr +", generos_formula, "+ s(pais_principal, bs = 're')"))
-f7 <- as.formula(paste("imdb_score ~ s(runtime, by = type) + type + s(release_year) + s(imdb_votes) + age_certification_agr + numero_temporadas + cantidad_actores + cantidad_directores +", generos_formula, "+ s(pais_principal, bs = 're')"))
+base_lineal  <- "runtime * type + release_year + log_votes + age_certification_agr"
+base_spline  <- "s(runtime, by = type, bs = 'cr') + type + s(release_year, bs = 'cr') + s(log_votes, bs = 'cr') + age_certification_agr"
+elenco       <- "numero_temporadas + cantidad_actores + cantidad_directores"
+
+f1 <- as.formula(paste("imdb_score ~", base_lineal, "+ pais_agrupado +", generos_formula))
+f2 <- as.formula(paste("imdb_score ~", base_lineal, "+ pais_agrupado +", elenco, "+ n_generos +", generos_formula))
+f3 <- as.formula(paste("imdb_score ~", base_lineal, "+", generos_formula, "+ (1 | pais_principal)"))
+f4 <- as.formula(paste("imdb_score ~", base_lineal, "+", generos_formula, "+ (1 | director_principal)"))
+f5 <- as.formula(paste("imdb_score ~", base_spline, "+ pais_agrupado +", generos_formula))
+f6 <- as.formula(paste("imdb_score ~", base_spline, "+", generos_formula, "+ s(pais_principal, bs = 're')"))
+f7 <- as.formula(paste("imdb_score ~", base_spline, "+", elenco, "+", generos_formula, "+ s(pais_principal, bs = 're')"))
 
 mse <- function(pred, real) mean((pred - real)^2)
 ```
 
-Evaluamos con **validación cruzada de 5 folds** sobre `titles_train` (en vez de un único split entrenamiento/testeo), para que el MSE de cada modelo no dependa de qué partición aleatoria nos tocó. Probamos siete modelos, usando en cada uno las variables disponibles (duración, año, votos, tipo, certificación de edad, géneros, país, elenco). En todos dejamos que el efecto de `runtime` varíe según `type`, porque en la Sección 1 vimos que `runtime` mide cosas distintas para películas y series:
+Evaluamos con **validación cruzada de 5 folds** sobre `titles_train` (en vez de un único split entrenamiento/testeo), para que el MSE de cada modelo no dependa de qué partición aleatoria nos tocó. Probamos siete modelos con las variables disponibles (duración, año, votos, tipo, certificación de edad, géneros, país, elenco). Dos decisiones son comunes a todos y salen de la Sección 1: usamos $\log_{10}$ de los votos, porque es la escala en la que esa variable se relaciona con el score, y dejamos que el efecto de `runtime` varíe según `type`, porque mide cosas distintas en películas y en series.
 
 1. **Lineal base**: `lm` con duración interactuada con tipo, año, votos, certificación y géneros, más el país agrupado (los 9 países más frecuentes + "Otro") como efecto fijo.
 2. **Lineal enriquecido**: el anterior sumando temporadas, cantidad de actores/directores y cantidad de géneros.
 3. **Efectos mixtos por país**: intercept aleatorio por país (`lmer`, `(1 | pais)`), con las mismas variables fijas que el modelo 1 (sin el país como efecto fijo, ya que ahora es la variable de agrupamiento).
 4. **Efectos mixtos por director**: igual al anterior pero con intercept aleatorio por director principal.
-5. **Splines**: `gam` con splines penalizados (`mgcv`) sobre año y votos, y un spline de duración distinto por tipo (`s(runtime, by = type)`), más certificación y géneros como términos paramétricos.
-6. **Splines + efecto aleatorio de país**: el modelo 5 sumando un término `s(pais, bs="re")`, combinando splines penalizados con partial pooling por país.
-7. **Splines + aleatorio de país + elenco**: el modelo 6 sumando temporadas, cantidad de actores y cantidad de directores (las mismas variables de elenco que en el modelo 2 no habían ayudado casi nada en un contexto lineal, pero acá las volvemos a probar combinadas con splines y partial pooling).
+5. **Splines**: `gam` con splines penalizados (`mgcv`, base `bs = "cr"` como en la clase) sobre año y votos, y un spline de duración distinto por tipo, más certificación y géneros como términos paramétricos. Dejamos que `gam` elija la penalización por GCV en vez de fijarla a mano.
+6. **Splines + efecto aleatorio de país**: el modelo 5 sumando un término `s(pais, bs = "re")`, que combina splines penalizados con el partial pooling por país.
+7. **Splines + aleatorio de país + elenco**: el modelo 6 sumando temporadas, cantidad de actores y cantidad de directores, las mismas variables de elenco que en el modelo 2 casi no habían ayudado en un contexto lineal.
 
 ```{r cv-modelos, cache=TRUE}
 set.seed(123)
@@ -482,7 +497,7 @@ tabla_mse %>%
   row_spec(1, bold = TRUE)
 ```
 
-El modelo ganador es el **7 (splines + aleatorio de país + elenco)**, con MSE medio = `r round(tabla_mse[["MSE medio"]][1],4)` y desvío entre folds de `r round(tabla_mse[["Desvio entre folds"]][1],4)`. Sumar las variables de elenco al modelo 6 mejora el MSE en la mayoría de los folds, aunque la distancia entre los modelos 6 y 7 (`r round(tabla_mse[["MSE medio"]][tabla_mse$Modelo=="6. Splines + aleatorio (pais)"] - tabla_mse[["MSE medio"]][1],4)`) es chica frente al desvío entre folds, así que la tomamos con la misma cautela que cualquier diferencia de ese tamaño. Lo que sí es robusto, y se mantiene en los 5 folds, es que los splines superan claramente a los modelos lineales (los efectos de duración, año y votos no son lineales) y que agregar el efecto aleatorio de país siempre ayuda un poco más sobre el spline puro.
+El modelo ganador es el **7 (splines + aleatorio de país + elenco)**, con MSE medio = `r round(tabla_mse[["MSE medio"]][1],4)` y desvío entre folds de `r round(tabla_mse[["Desvio entre folds"]][1],4)`. Fue el mejor en los **cinco** folds, así que el resultado no depende de la partición. La jerarquía también es clara: los tres modelos con splines quedan bien por debajo de los cuatro sin splines, lo que confirma que la no linealidad de duración, año y votos es lo que más pesa. Sobre esa base, el efecto aleatorio de país y las variables de elenco aportan mejoras chicas pero consistentes (`r round(tabla_mse[["MSE medio"]][tabla_mse$Modelo=="5. Splines"] - tabla_mse[["MSE medio"]][1],4)` puntos de MSE entre el modelo 5 y el 7). Como esas diferencias son chicas frente al desvío entre folds, las leemos como una mejora sostenida y no como una ventaja contundente.
 
 ```{r modelos-completos, cache=TRUE}
 train_full <- train_f %>% mutate(pais_principal = factor(pais_principal))
@@ -503,19 +518,56 @@ icc_pais <- icc(m3_full, "pais_principal")
 icc_dir  <- icc(m4_full, "director_principal")
 ```
 
-Entre los modelos mixtos, el de **director** (ICC $\approx$ `r round(icc_dir,2)`, ajustado sobre todo `titles_train`) explica proporcionalmente más varianza entre grupos que el de **país** (ICC $\approx$ `r round(icc_pais,2)`), aunque el 85\% de los directores tiene un solo título en el dataset: hay señal real en quién dirige, pero es difícil de aprovechar con tan pocos datos por grupo. El país, en cambio, tiene grupos más balanceados y por eso lo elegimos como variable de agrupamiento en el modelo final. Enriquecer el modelo lineal con variables de elenco (modelo 2) prácticamente no había mejorado el MSE respecto del modelo 1 (por eso en un principio las habíamos dejado afuera del modelo ganador), pero combinadas con splines y el efecto aleatorio de país (modelo 7) sí suman algo, así que terminamos incluyéndolas.
+Los dos modelos mixtos quedaron prácticamente empatados (`r round(tabla_mse[["MSE medio"]][tabla_mse$Modelo=="3. Mixto (pais)"],4)` para país y `r round(tabla_mse[["MSE medio"]][tabla_mse$Modelo=="4. Mixto (director)"],4)` para director), pese a que el ICC del agrupamiento por **director** es bastante más alto (`r round(icc_dir,2)` contra `r round(icc_pais,2)` de **país**). Es decir: hay más señal en quién dirige que en el país de producción, pero es señal difícil de cobrar, porque el 85\% de los directores aparece en un solo título.
 
-Una limitación a tener en cuenta: los modelos 1, 2 y 5 representan el país con las 9 categorías más frecuentes ("país agrupado", efecto fijo), mientras que los modelos 3, 4, 6 y 7 usan los 79 países completos como variable de agrupamiento de un efecto aleatorio. La comparación de MSE entre familias de modelos mezcla entonces dos decisiones a la vez (splines/mixtos vs. lineal, y cómo se representa el país), no aísla una sola cosa.
+Para la familia con splines elegimos **país** y no director como variable de agrupamiento, por dos razones prácticas. La primera es de cobertura sobre el test real: el `r round(100*mean(test_f$director_principal %in% setdiff(test_f$director_principal, train_f$director_principal)))`\% de los títulos de `titles_test` tiene un director que no aparece en el entrenamiento, y otro grupo grande no tiene director acreditado, así que para cerca del 80\% del test el efecto aleatorio de director colapsa a la media poblacional y no aporta nada; con país ese problema afecta a solo el 1\% de los títulos. La segunda es de costo: ajustar `s(director, bs = "re")` con más de 2.000 niveles tarda más de diez minutos por fold, contra unos pocos segundos con los `r nlevels(train_full$pais_principal)` niveles de país, lo que hacía inviable meterlo en la validación cruzada completa.
 
-```{r fig-splines, fig.width=7.4, fig.height=2.6, fig.cap="Efecto parcial estimado en el modelo ganador: duración (separado por tipo de título), año y votos de IMDB."}
-par(mfrow = c(1, 4), mar = c(4, 4, 2, 1), cex = 0.65)
-plot(m7_full, select = 1, shade = TRUE, main = "Duración | Película", col = paleta[1])
-plot(m7_full, select = 2, shade = TRUE, main = "Duración | Serie", col = paleta[1])
-plot(m7_full, select = 3, shade = TRUE, main = "Año", col = paleta[2])
-plot(m7_full, select = 4, shade = TRUE, main = "Votos de IMDB", col = paleta[3])
+Enriquecer el modelo lineal con variables de elenco (modelo 2) casi no mejoró el MSE respecto del modelo 1, pero combinadas con splines y el efecto aleatorio de país (modelo 7) sí aportan, así que terminamos incluyéndolas. Vale como advertencia metodológica: descartar una variable por cómo rindió dentro de una sola familia de modelos puede hacernos perder algo que sí sirve en otra.
+
+Una limitación: los modelos 1, 2 y 5 representan el país con las 9 categorías más frecuentes (efecto fijo), mientras que los modelos 3, 4, 6 y 7 usan los `r nlevels(train_full$pais_principal)` países completos como agrupamiento de un efecto aleatorio. La comparación entre familias mezcla entonces dos decisiones a la vez, no aísla una sola.
+
+```{r fig-splines, fig.width=7.4, fig.height=2.8, fig.cap="Efecto parcial estimado de cada spline del modelo ganador, con banda de dos errores estándar. Las marcas del eje inferior son los valores observados. La duración se estima por separado para películas y series."}
+## extraemos cada suavizado con predict(type = "terms"), como en la clase de splines
+efecto_parcial <- function(modelo, datos, variable, columna, etiqueta, tipo = NULL, n = 200) {
+  observados <- if (is.null(tipo)) datos else datos[datos$type == tipo, ]
+  grilla <- datos[rep(1, n), , drop = FALSE]
+  grilla[[variable]] <- seq(min(observados[[variable]]), max(observados[[variable]]), length.out = n)
+  if (!is.null(tipo)) grilla$type <- factor(tipo, levels = levels(datos$type))
+  pr <- predict(modelo, newdata = grilla, type = "terms", se.fit = TRUE)
+  tibble(x = grilla[[variable]], fit = pr$fit[, columna], se = pr$se.fit[, columna],
+         panel = etiqueta)
+}
+
+paneles <- c("Duración | Película", "Duración | Serie", "Año de estreno", "Votos de IMDB (log10)")
+
+curvas <- bind_rows(
+  efecto_parcial(m7_full, train_full, "runtime", "s(runtime):typeMOVIE", paneles[1], tipo = "MOVIE"),
+  efecto_parcial(m7_full, train_full, "runtime", "s(runtime):typeSHOW",  paneles[2], tipo = "SHOW"),
+  efecto_parcial(m7_full, train_full, "release_year", "s(release_year)", paneles[3]),
+  efecto_parcial(m7_full, train_full, "log_votes", "s(log_votes)",       paneles[4])
+) %>% mutate(panel = factor(panel, levels = paneles))
+
+observaciones <- bind_rows(
+  tibble(x = train_full$runtime[train_full$type == "MOVIE"], panel = paneles[1]),
+  tibble(x = train_full$runtime[train_full$type == "SHOW"],  panel = paneles[2]),
+  tibble(x = train_full$release_year, panel = paneles[3]),
+  tibble(x = train_full$log_votes,    panel = paneles[4])
+) %>% mutate(panel = factor(panel, levels = paneles))
+
+ggplot(curvas, aes(x = x, y = fit)) +
+  geom_hline(yintercept = 0, color = "grey70", linewidth = 0.3) +
+  geom_ribbon(aes(ymin = fit - 2 * se, ymax = fit + 2 * se), fill = paleta[1], alpha = 0.20) +
+  geom_line(color = paleta[1], linewidth = 0.7) +
+  geom_rug(data = observaciones, aes(x = x), inherit.aes = FALSE,
+           alpha = 0.10, length = unit(0.03, "npc"), color = "grey30") +
+  facet_wrap(~panel, scales = "free_x", nrow = 1) +
+  labs(x = NULL, y = "Efecto sobre el score") +
+  tema_tp +
+  theme(strip.text = element_text(size = 7.5, face = "bold"),
+        panel.spacing = unit(0.5, "lines"))
 ```
 
-La Figura \ref{fig:fig-splines} muestra por qué el spline le gana al modelo lineal: el efecto de la duración no es monótono y además tiene una forma distinta para películas que para series (consistente con la Figura \ref{fig:fig-runtime-tipo}), y el de los votos se aplana en valores altos   relaciones que un término lineal compartido no puede capturar. Las bandas se ensanchan en los extremos (películas de más de 200 minutos, por ejemplo) porque hay pocos títulos ahí.
+La Figura \ref{fig:fig-splines} muestra por qué el spline le gana al modelo lineal. El efecto de la duración no es monótono y tiene una forma bien distinta según el tipo: en películas cae hasta los 100 minutos y después sube con fuerza, mientras que en series es casi monótono creciente y mucho más suave (`r round(summary(m7_full)$s.table["s(runtime):typeSHOW","edf"],1)` grados de libertad efectivos contra `r round(summary(m7_full)$s.table["s(runtime):typeMOVIE","edf"],1)` en películas). El de los votos es el término más flexible de todos (`r round(summary(m7_full)$s.table["s(log_votes)","edf"],1)` grados de libertad) y crece de forma marcada: son las relaciones que un término lineal compartido no puede capturar. Las bandas se ensanchan en los extremos, donde el rug muestra que hay pocos títulos.
 
 ## 4. Competencia
 
@@ -532,8 +584,8 @@ Usamos el modelo ganador (splines + efecto aleatorio de país + elenco), ya ajus
 
 ## Conclusiones
 
-El score de IMDB depende sobre todo de variables no lineales   duración (con una forma distinta para películas que para series), año y cantidad de votos y del género y tipo de título, con un margen adicional que aportan el país de producción vía *partial pooling* y el tamaño del elenco. El modelo ganador combina splines penalizados, un efecto aleatorio de país y variables de elenco (cantidad de actores y directores), mejorando el MSE de validación cruzada en cerca de un `r round(100*(tabla_mse[["MSE medio"]][tabla_mse$Modelo=="1. Lineal base"] - tabla_mse[["MSE medio"]][1]) / tabla_mse[["MSE medio"]][tabla_mse$Modelo=="1. Lineal base"])`\% respecto del modelo lineal base. Las variables de elenco solo aportaron una vez combinadas con splines y partial pooling: en un modelo puramente lineal (modelo 2) no habían mostrado ninguna mejora, algo que vale la pena tener presente antes de descartar una variable por cómo rindió en un solo tipo de modelo.
+El score de IMDB depende sobre todo de variables no lineales (duración, con una forma distinta para películas que para series; año; y cantidad de votos en escala logarítmica), del género y del tipo de título, con un margen adicional que aportan el país de producción vía *partial pooling* y el tamaño del elenco. El modelo ganador combina las tres ideas y mejora el MSE de validación cruzada en cerca de un `r round(100*(tabla_mse[["MSE medio"]][tabla_mse$Modelo=="1. Lineal base"] - tabla_mse[["MSE medio"]][1]) / tabla_mse[["MSE medio"]][tabla_mse$Modelo=="1. Lineal base"])`\% respecto del modelo lineal base, ganando en los cinco folds.
 
-En la sección de causalidad, el efecto directo de Comedia sobre Score resultó similar a la asociación cruda, lo que indica que ni el confounding por país ni la mediación por duración son fuertes en estos datos.
+En causalidad, el efecto directo de Comedia sobre Score resultó muy parecido a la asociación cruda: ni el confounding por país ni la mediación por duración son fuertes acá. Buen recordatorio de que ajustar por el conjunto correcto no siempre cambia el número; el valor del DAG estuvo en poder afirmar que la asociación cruda *es* interpretable causalmente, no en corregirla.
 
-El hilo conductor de la exploración y de la selección de modelos terminó siendo el *partial pooling*: lo usamos para rankear directores y actores con Empirical Bayes en vez de promedio crudo, para elegir la variable de agrupamiento del modelo mixto ganador (país por sobre director, porque tiene grupos menos extremos) y en el modelo final. La lección se repite en cada instancia: el shrinkage ayuda mucho cuando hay grupos de tamaños dispares, pero con miles de directores de un solo título o decenas de miles de actores queda muy poca información por grupo como para que incluso el shrinkage separe bien la señal del ruido.
+Del proceso de selección nos quedaron dos aprendizajes. Uno es que conviene probar una variable en más de una familia de modelos antes de descartarla: las de elenco no aportaban nada en el lineal y sí combinadas con splines y partial pooling. El otro es sobre el *partial pooling*, hilo conductor del trabajo, que también mostró su límite: el agrupamiento por director tiene más señal que el de país (ICC `r round(icc_dir,2)` contra `r round(icc_pais,2)`) y aun así no nos sirvió, porque para el 80\% de los títulos a predecir el director es desconocido o no está acreditado. Que un efecto exista no alcanza: para que ayude a predecir tiene que estar presente en los datos nuevos.
